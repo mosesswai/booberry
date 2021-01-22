@@ -1,36 +1,48 @@
 /* Booberry project!
- * Code: Moses - WIFI
+ * Code: Linda - GSM, no IO library
  * by Moses.
  */
 
-// contains network infon
+// contains network info
 #include "config.h"
 
 /***** LED pins *****/
 #define RED_PIN   12
-#define GREEN_PIN 14
-#define BLUE_PIN  13
+#define GREEN_PIN 11
+#define BLUE_PIN  10
 
 /***** sensor pins *****/
-#define TOUCH_PIN 4
+#define TOUCH_PIN A1
 
 /***** time intervals *****/
 #define BLINK_INTERVAL        500
 #define WAIT_INTERVAL         1500
 #define RESEND_INTERVAL       20000
+#define PING_INTERVAL         150000
 
 #define NEUTRAL_INTERVAL      3000
 #define CONTINENTAL_INTERVAL  5000
 #define MOONISH_INTERVAL      10000
 #define PLANETARY_INTERVAL    15000
 
+/***** feeds *****/
+#define MAIN_FEED     1
+#define SELF_FEED     2
+#define OTHER_FEED    3
+
 /***** set up feeds *****/
 // booberry - this is the main feed
-AdafruitIO_Feed *feed = io.feed("booberry");
+Adafruit_MQTT_Publish feed = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/booberry");
+Adafruit_MQTT_Subscribe feedSubscription = Adafruit_MQTT_Subscribe(&mqtt, IO_USERNAME "/feeds/booberry");
 
 // ready fields to make sure both feeds are engaged
-AdafruitIO_Feed *receivedSelf = io.feed("boo-moz");
-AdafruitIO_Feed *receivedOther = io.feed("boo-liz");
+Adafruit_MQTT_Publish receivedSelf = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/boo-liz");
+//Adafruit_MQTT_Publish receivedOther = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/boo-moz");
+Adafruit_MQTT_Subscribe receivedOtherSubscription = Adafruit_MQTT_Subscribe(&mqtt, IO_USERNAME "/feeds/boo-moz");
+
+// Maximum number of publish failures in a row before resetting the whole sketch.  
+#define MAX_TX_FAILURES      3
+uint8_t txfailures = 0;  
 
 /***** device states *****/
 typedef enum {
@@ -73,6 +85,7 @@ boolean lightsOn = false;
 int lastTouchTime = 0;
 int lastBlinkTime = 0;
 int lastWaitTime = 0;
+int lastPingTime = 0;
 
 // keeps track of publish state and value
 bool pendingPublish = true;
@@ -84,7 +97,7 @@ void setup() {
   pinMode(RED_PIN, OUTPUT);
   pinMode(GREEN_PIN, OUTPUT);
   pinMode(BLUE_PIN, OUTPUT);
-  pinMode(TOUCH_PIN, INPUT);
+  pinMode(TOUCH_PIN, INPUT);    
 
   // initial state
   state = NEUTRAL;
@@ -93,9 +106,9 @@ void setup() {
   // keep yellow light on for set-up
   ledsON(HIGH, HIGH, LOW);
 
-  // create message handlers
-  feed->onMessage(handleFeed);
-  receivedOther->onMessage(handleOther);
+  // create feed subscriptions
+  mqtt.subscribe(&feedSubscription);
+  mqtt.subscribe(&receivedOtherSubscription);
 
   /* for debugging */
   // start the serial connection
@@ -104,36 +117,30 @@ void setup() {
   // wait for serial monitor to open
   while(! Serial);
 
+  // initialize the FONA to connect to the internet
+  initializeFona();
+  initializeNetwork();
+  initializeGPRS();
+
   // connect to io.adafruit.com
-  Serial.print("Connecting to Adafruit IO");
-  io.connect();
-
-  // wait for a connection
-  while(io.status() < AIO_CONNECTED) {
-    Serial.print(".");
-    delay(500);
-  }
-
-  // we are connected
-  Serial.println();
-  Serial.println(io.statusText());
+  Serial.println("Connecting to Adafruit IO...");
+  MQTT_connect();
+  Serial.println("Connected to Adafruit IO!");
 
   // indicate succesful setup, switch yellow lights off
-  ledsOFF();
+  ledsOFF();  
 }
 
 
 //loop function
 void loop() {
+  // Ensure the connection to the MQTT server is alive
+  MQTT_connect();
   
-  // keeps the client connected to io.adafruit.com, 
-  // and processes any incoming data.
-  io.run();
-
   // resend update feed if needed.
   checkWaiting();
 
- // republish if not previously successful
+  // republish if not previously successful
   checkPublish();
 
   // read the touch sensor
@@ -141,16 +148,70 @@ void loop() {
 
   // light up the lights
   lighting();
- 
+
+  // listen to subscription packets
+  Adafruit_MQTT_Subscribe *subscription;
+  while ((subscription = mqtt.readSubscription(2000))) {
+    if (subscription == &feedSubscription) {
+      handleFeed((char *)feedSubscription.lastread);
+    }
+    if (subscription == &receivedOtherSubscription) {
+      handleOther((char *)receivedOtherSubscription.lastread);
+    }    
+  }
+
+  // pings when necessary to maintain connection;
+  checkPing();
+
 }
 
+
+/* Function: publishIO
+ * Send data to required feed, IO
+ * Tries to publish 5 times before resetting
+ */
+void publishIO(int feedTo, uint32_t value) {
+  lastPublish = value; 
+  
+  Serial.print(F("\nSending val "));
+  Serial.print(value);
+  Serial.print("...");
+  
+  bool successful;
+  
+  switch(feedTo) {
+    case MAIN_FEED: 
+      successful = feed.publish(value);
+      pendingPublish = true;
+      break;
+    case SELF_FEED: 
+      successful = receivedSelf.publish(value);
+      break;
+//    case OTHER_FEED: successful = receivedOther.publish(value);
+    default: break;
+  }
+  
+  if (!successful) {
+    Serial.println(F("Failed"));
+    txfailures++;
+  } else {
+    Serial.println(F("OK!"));
+    txfailures = 0;
+    pendingPublish = false;
+  }
+  
+}
 
 /* Function: handleFeed 
  * Is called whenever the feed receives new data 
  */
-void handleFeed ( AdafruitIO_Data *data ) {
+void handleFeed ( char *data ) {
+
+  Serial.print(F("Got main: "));
+  Serial.println(data);
+
   // convert the data to integer
-  int reading = data->toInt();
+  int reading = atoi(data);
 
   switch (reading) {
     case 0: state = NEUTRAL; break;
@@ -173,7 +234,9 @@ void handleFeed ( AdafruitIO_Data *data ) {
   
   updated = true;
 
-  receivedSelf -> save(1);
+  pendingPublish = false;
+
+  publishIO(SELF_FEED, 1);
   
   Serial.print("state changed to: ");
   Serial.println(state);
@@ -187,11 +250,17 @@ void handleFeed ( AdafruitIO_Data *data ) {
  * Checks whether the other device has received the
  * message before allowing itself to engage.
  */
-void handleOther ( AdafruitIO_Data *data ) {
-  int reading = data->toInt();
+void handleOther ( char *data ) {
+  
+  Serial.print(F("Got other: "));
+  Serial.println(data);
+
+  // convert the data to integer
+  int reading = atoi(data);
+
   if(reading == 1) {
     waiting = false;
-    receivedOther ->save(0);
+//    publishIO(OTHER_FEED, 0);
     Serial.println("delivered");
   }
 }
@@ -206,11 +275,11 @@ void checkWaiting() {
     int currTime = millis();
     if ( (currTime - lastWaitTime) > RESEND_INTERVAL) {
       if (state == NEUTRAL) {
-        feed->save(0);
+        publishIO(MAIN_FEED, 0);
       } else {
         updateFeed(); 
       }
-      lastWaitTime = currTime; 
+      lastWaitTime = currTime;
     }
   }
 }
@@ -221,11 +290,21 @@ void checkWaiting() {
  */
 void checkPublish() {
   if (pendingPublish) {
-    feed->save(lastPublish);
-    pendingPublish = false;
+    publishIO(MAIN_FEED, lastPublish);
   }
 }
 
+
+/* Function: checkPing
+ * Pings after half the connection alive time to maintain it
+ */
+void checkPing() {
+  int currentTime = millis();
+  if (currentTime - lastPingTime > PING_INTERVAL) {
+    mqtt.ping();
+    lastPingTime = currentTime;
+  }
+}
 
 /* Function: readTouch
  * Checks the state of the touch sensor. If it is touched
@@ -268,7 +347,7 @@ void listeningWarm() {
   if (currentTime - lastTouchTime > NEUTRAL_INTERVAL) {
     listening = false;
     restored = false;
-    feed->save(0);
+    publishIO(MAIN_FEED, 0);
   }
 }
 
@@ -293,9 +372,9 @@ void listeningNeutral() {
  */
 void updateFeed() {
   switch (warmth) {
-    case CONTINENTAL: feed->save(1); break;
-    case MOONISH: feed->save(2); break;
-    case PLANETARY: feed->save(3); break;
+    case CONTINENTAL: publishIO(MAIN_FEED, 1); break;
+    case MOONISH: publishIO(MAIN_FEED, 2); break;
+    case PLANETARY: publishIO(MAIN_FEED, 3); break;
     default: break;
   }
 }
