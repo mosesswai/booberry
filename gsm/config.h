@@ -5,96 +5,39 @@
 #define IO_USERNAME    "mouzy34"
 #define IO_KEY         "be212370855e48fdb5f53e86b8980482"
 
-// Adafruit IO configuration
-#define IO_SERVER           "io.adafruit.com"  // Adafruit IO server name.
-#define IO_SERVERPORT       1883  // Adafruit IO port. 
+/******************************* WIFI **************************************/
+
+// the AdafruitIO_WiFi client will work with the following boards:
+//   - HUZZAH ESP8266 Breakout -> https://www.adafruit.com/products/2471
+//   - Feather HUZZAH ESP8266 -> https://www.adafruit.com/products/2821
+//   - Feather M0 WiFi -> https://www.adafruit.com/products/3010
+//   - Feather WICED -> https://www.adafruit.com/products/3056
+
+#define WIFI_SSID       "Stanford Residences"
+#define WIFI_PASS       ""
+
+// comment out the following two lines if you are using fona or ethernet
+//#include "AdafruitIO_WiFi.h"
+//AdafruitIO_WiFi io(IO_USERNAME, IO_KEY, WIFI_SSID, WIFI_PASS);
 
 
 /******************************* FONA **************************************/
 
-// includes
-#include "Adafruit_FONA.h"
-#include "Adafruit_MQTT.h"
-#include "Adafruit_MQTT_FONA.h"
-#include <SoftwareSerial.h>
-#include <Adafruit_SleepyDog.h>
+// the AdafruitIO_FONA client will work with the following boards:
+//   - Feather 32u4 FONA -> https://www.adafruit.com/product/3027
 
-// FONA pin configuration
-#define FONA_RX 9
-#define FONA_TX 8
-#define FONA_RST 4
-#define FONA_RI  7
+// uncomment the following two lines for 32u4 FONA,
+// and comment out the AdafruitIO_WiFi client in the WIFI section
+#include "AdafruitIO_FONA.h"
+AdafruitIO_FONA io(IO_USERNAME, IO_KEY);
 
-// FONA GPRS configuration
-#define FONA_APN             "pwg"  
-#define FONA_USERNAME        ""  
-#define FONA_PASSWORD        ""  
- 
 
-// module instances
-SoftwareSerial fonaSS = SoftwareSerial(FONA_TX, FONA_RX);
-SoftwareSerial *fonaSerial = &fonaSS;
+/**************************** ETHERNET ************************************/
 
-Adafruit_FONA fona = Adafruit_FONA(FONA_RST);
+// the AdafruitIO_Ethernet client will work with the following boards:
+//   - Ethernet FeatherWing -> https://www.adafruit.com/products/3201
 
-// Setup the FONA MQTT class by passing in the FONA class and MQTT server and login details.
-Adafruit_MQTT_FONA mqtt(&fona, IO_SERVER, IO_SERVERPORT, IO_USERNAME, IO_KEY);
-
-// find and initialize the FONA
-void initializeFona() {  
-  fonaSerial->begin(4800);
-  if (! fona.begin(*fonaSerial)) {
-    Serial.println(F("Couldn't find FONA"));
-    while (1);
-  }
-  Serial.println(F("FONA is OK"));  
-}
-
-// connect to the cellular network
-void initializeNetwork() {
-  Serial.println(F("Checking for network..."));
-  while (fona.getNetworkStatus() != 1) {
-   delay(500);
-  }
-  Serial.println(F("Registered (home)"));  
-}
-
-// enable the GPRS
-void initializeGPRS() {
-  // set the APN settings
-  fona.setGPRSNetworkSettings(F(FONA_APN), F(FONA_USERNAME), F(FONA_PASSWORD));
-  delay(2000);
-
-  //reset GPRS
-  Serial.println(F("Disabling GPRS"));
-  fona.enableGPRS(false);
-  delay(2000);
-  
-  Serial.println(F("Enabling GPRS"));
-  if (!fona.enableGPRS(true)) {
-    Serial.println(F("Failed to turn GPRS on, resetting..."));
-  }
-  Serial.println(F("Connected to Cellular!"));
-  
-}
-
-// Function to connect and reconnect as necessary to the MQTT server.
-void MQTT_connect() {
-  int8_t ret;
-
-  // Stop if already connected.
-  if (mqtt.connected()) {
-    Serial.println("MQTT Already Connected!");
-    return;
-  }
-
-  Serial.print("Connecting to MQTT... ");
-
-  while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
-    Serial.println(mqtt.connectErrorString(ret));
-    Serial.println("Retrying MQTT connection in 5 seconds...");
-    mqtt.disconnect();
-    delay(5000);  // wait 5 seconds
-  }
-  Serial.println("MQTT Connected!");
-}
+// uncomment the following two lines for ethernet,
+// and comment out the AdafruitIO_WiFi client in the WIFI section
+// #include "AdafruitIO_Ethernet.h"
+// AdafruitIO_Ethernet io(IO_USERNAME, IO_KEY);

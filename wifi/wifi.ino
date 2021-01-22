@@ -6,6 +6,9 @@
 // contains network infon
 #include "config.h"
 
+//uncomment to print to serial for debugging
+//#define DEBUG_MODE
+
 /***** LED pins *****/
 #define RED_PIN   12
 #define GREEN_PIN 14
@@ -70,9 +73,9 @@ boolean restored = true;
 boolean lightsOn = false;
 
 // keeps track of time for various activities
-int lastTouchTime = 0;
-int lastBlinkTime = 0;
-int lastWaitTime = 0;
+unsigned long lastTouchTime = 0;
+unsigned long lastBlinkTime = 0;
+unsigned long lastWaitTime = 0;
 
 // keeps track of publish state and value
 bool pendingPublish = true;
@@ -102,7 +105,7 @@ void setup() {
   Serial.begin(115200);
 
   // wait for serial monitor to open
-  while(! Serial);
+//  while(! Serial);
 
   // connect to io.adafruit.com
   Serial.print("Connecting to Adafruit IO");
@@ -133,7 +136,7 @@ void loop() {
   // resend update feed if needed.
   checkWaiting();
 
- // republish if not previously successful
+  // republish if not previously successful
   checkPublish();
 
   // read the touch sensor
@@ -174,12 +177,14 @@ void handleFeed ( AdafruitIO_Data *data ) {
   updated = true;
 
   receivedSelf -> save(1);
-  
-  Serial.print("state changed to: ");
-  Serial.println(state);
 
-  Serial.print("warmth changed to: ");
-  Serial.println(warmth);
+  #ifdef DEBUG_MODE
+    Serial.print("state changed to: ");
+    Serial.println(state);
+  
+    Serial.print("warmth changed to: ");
+    Serial.println(warmth);
+  #endif
 }
 
 
@@ -192,7 +197,10 @@ void handleOther ( AdafruitIO_Data *data ) {
   if(reading == 1) {
     waiting = false;
     receivedOther ->save(0);
-    Serial.println("delivered");
+    
+    #ifdef DEBUG_MODE
+      Serial.println("delivered");
+    # endif
   }
 }
 
@@ -203,7 +211,7 @@ void handleOther ( AdafruitIO_Data *data ) {
  */
 void checkWaiting() {
   if(waiting) {
-    int currTime = millis();
+    unsigned long currTime = millis();
     if ( (currTime - lastWaitTime) > RESEND_INTERVAL) {
       if (state == NEUTRAL) {
         feed->save(0);
@@ -264,7 +272,7 @@ void readTouch() {
 
 // listening to touch sensor when in warm state
 void listeningWarm() {
-  int currentTime = millis();
+  unsigned long currentTime = millis();
   if (currentTime - lastTouchTime > NEUTRAL_INTERVAL) {
     listening = false;
     restored = false;
@@ -274,7 +282,7 @@ void listeningWarm() {
 
 // listening to touch sensor when in neutral state
 void listeningNeutral() {
-  int currentTime = millis();
+  unsigned long currentTime = millis();
   if (currentTime - lastTouchTime > PLANETARY_INTERVAL) {
     queued = true;
     warmth = PLANETARY;
@@ -326,8 +334,8 @@ void lighting() {
 
 
 // blinks the LED when in queue or waiting mode
-void blinkLED(int interval) {
-  int currentTime = millis();
+void blinkLED(unsigned long interval) {
+  unsigned long currentTime = millis();
   if(currentTime - lastBlinkTime > interval) {
     if(lightsOn) {
       ledsOFF();
@@ -369,3 +377,4 @@ void ledsOFF() {
   digitalWrite(GREEN_PIN, LOW);
   digitalWrite(BLUE_PIN, LOW);
 }
+
